@@ -1,71 +1,104 @@
 package Client;
-import javax.swing.*;
 import java.io.*;
 import java.net.*;
+import javax.swing.*;
 
 public class GameClient {
-    private static String SERVER_IP;
-    private static int PORT;
-    private Socket socket;
-    private PrintWriter out;
-    private BufferedReader in;
+    private static String serverIP;
+    private static int serverPort;
+    private static Socket socket;
+    private static BufferedReader in;
+    private static PrintWriter out;
 
     public static void main(String[] args) {
-        new GameClient().start();
-    }
-
-    public void start() {
         try {
-            // Solicitar la IP y el puerto del servidor mediante JOptionPane
-            SERVER_IP = JOptionPane.showInputDialog("Ingresa la dirección IP del servidor:");
+            // Pedir al usuario la IP y el puerto del servidor
+            serverIP = JOptionPane.showInputDialog("Ingresa la IP del servidor:");
             String portInput = JOptionPane.showInputDialog("Ingresa el puerto del servidor:");
-            PORT = (portInput == null || portInput.isEmpty()) ? 12345 : Integer.parseInt(portInput);
+            serverPort = (portInput == null || portInput.isEmpty()) ? 12345 : Integer.parseInt(portInput);
 
-            // Conectar al servidor usando la IP y el puerto proporcionados
-            socket = new Socket(SERVER_IP, PORT);
-            out = new PrintWriter(socket.getOutputStream(), true);
+            // Conectarse al servidor
+            socket = new Socket(serverIP, serverPort);
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            System.out.println("Conectado al servidor en " + SERVER_IP + ":" + PORT);
+            out = new PrintWriter(socket.getOutputStream(), true);
 
-            // Ciclo principal para recibir instrucciones del servidor
-            String serverMessage;
-            while ((serverMessage = in.readLine()) != null) {
-                System.out.println("Servidor: " + serverMessage);
-                
-                if (serverMessage.equals("Juega")) {
-                    // Mostrar opciones de juego: Piedra, Papel, Tijera
-                    String[] options = {"Piedra", "Papel", "Tijera"};
-                    int choice = JOptionPane.showOptionDialog(
-                            null,
-                            "Selecciona tu jugada:",
-                            "Juego Piedra, Papel o Tijera",
-                            JOptionPane.DEFAULT_OPTION,
-                            JOptionPane.INFORMATION_MESSAGE,
-                            null,
-                            options,
-                            options[0]);
+            JOptionPane.showMessageDialog(null, "Conectado al servidor de Piedra, Papel o Tijera.");
 
-                    String selection = options[choice];
-                    out.println(selection); // Enviar la selección al servidor
-                } else if (serverMessage.equals("Salir")) {
-                    JOptionPane.showMessageDialog(null, "El juego ha terminado.");
-                    break; // Termina el juego
-                }
-            }
+            // Ejecutar la lógica del juego
+            runGame();
+
         } catch (IOException e) {
-            System.err.println("Error de conexión: " + e.getMessage());
+            JOptionPane.showMessageDialog(null, "Error al conectarse al servidor: " + e.getMessage());
         } finally {
             closeConnection();
         }
     }
 
-    private void closeConnection() {
+    private static void runGame() {
         try {
-            if (socket != null) {
-                socket.close();
+            String serverMessage;
+
+            while ((serverMessage = in.readLine()) != null) {
+                if (serverMessage.equals("Juega")) {
+                    // Mostrar opciones de Piedra, Papel o Tijera
+                    String[] options = {"Piedra", "Papel", "Tijera"};
+                    String choice = (String) JOptionPane.showInputDialog(
+                            null,
+                            "Elige tu opción:",
+                            "Piedra, Papel o Tijera",
+                            JOptionPane.QUESTION_MESSAGE,
+                            null,
+                            options,
+                            options[0]
+                    );
+
+                    // Enviar la elección al servidor
+                    if (choice != null) {
+                        out.println(choice);
+                    } else {
+                        out.println("Salir");
+                        break;
+                    }
+                } else if (serverMessage.contains("Resultado de la partida")) {
+                    // Mostrar el resultado de la partida
+                    JOptionPane.showMessageDialog(null, serverMessage);
+                } else if (serverMessage.equals("¿Deseas continuar jugando? (sí/no)")) {
+                    // Preguntar al usuario si desea continuar
+                    int response = JOptionPane.showConfirmDialog(
+                            null,
+                            "¿Deseas continuar jugando?",
+                            "Continuar jugando",
+                            JOptionPane.YES_NO_OPTION
+                    );
+
+                    // Enviar la respuesta al servidor
+                    if (response == JOptionPane.YES_OPTION) {
+                        out.println("sí");
+                    } else {
+                        out.println("no");
+                        break; // Salir del bucle si el jugador no desea continuar
+                    }
+                }
             }
         } catch (IOException e) {
-            System.err.println("Error al cerrar la conexión: " + e.getMessage());
+            JOptionPane.showMessageDialog(null, "Error en la comunicación con el servidor: " + e.getMessage());
+        }
+    }
+
+    // Cerrar la conexión con el servidor
+    private static void closeConnection() {
+        try {
+            if (socket != null && !socket.isClosed()) {
+                socket.close();
+            }
+            if (in != null) {
+                in.close();
+            }
+            if (out != null) {
+                out.close();
+            }
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(null, "Error al cerrar la conexión: " + e.getMessage());
         }
     }
 }

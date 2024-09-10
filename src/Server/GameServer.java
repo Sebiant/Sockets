@@ -1,5 +1,4 @@
-package Server;
-import java.io.*;
+package Server;import java.io.*;
 import java.net.*;
 import java.util.*;
 import javax.swing.*;
@@ -93,6 +92,7 @@ public class GameServer {
         private Socket socket;
         private PrintWriter out;
         private BufferedReader in;
+        private boolean wantsToContinue = true;
 
         public PlayerHandler(Socket socket) throws IOException {
             this.socket = socket;
@@ -114,6 +114,26 @@ public class GameServer {
             } finally {
                 close();
             }
+        }
+
+        // Enviar mensaje al jugador
+        public void sendMessage(String message) {
+            out.println(message);
+        }
+
+        // Recibir respuesta del jugador
+        public String receiveMessage() throws IOException {
+            return in.readLine();
+        }
+
+        // Determinar si el jugador quiere continuar jugando
+        public boolean wantsToContinue() {
+            return wantsToContinue;
+        }
+
+        // Actualizar el estado de continuar jugando
+        public void setWantsToContinue(boolean value) {
+            this.wantsToContinue = value;
         }
 
         // Cerrar la conexión con el jugador
@@ -139,34 +159,51 @@ public class GameServer {
         // Lógica principal del juego
         @Override
         public void run() {
-            try {
-                for (PlayerHandler player : players) {
-                    player.out.println("Juega"); // Enviar instrucción para jugar
-                }
+            boolean continuePlaying = true;
 
-                // Recibir las elecciones de los jugadores
-                List<String> choices = new ArrayList<>();
-                for (PlayerHandler player : players) {
-                    String choice = player.in.readLine();
-                    choices.add(choice);
-                    System.out.println("Jugador eligió: " + choice);
-                }
+            while (continuePlaying) {
+                try {
+                    // Solicitar a los jugadores que jueguen
+                    for (PlayerHandler player : players) {
+                        player.sendMessage("Juega"); // Enviar instrucción para jugar
+                    }
 
-                // Lógica para determinar el ganador
-                // (Simplificado: Mostrar las elecciones, no la lógica completa del juego)
-                for (PlayerHandler player : players) {
-                    player.out.println("Jugadas: " + String.join(", ", choices));
-                    player.out.println("Esperando otros jugadores...");
-                }
+                    // Recibir las elecciones de los jugadores
+                    List<String> choices = new ArrayList<>();
+                    for (PlayerHandler player : players) {
+                        String choice = player.receiveMessage();
+                        choices.add(choice);
+                        System.out.println("Jugador eligió: " + choice);
+                    }
 
-            } catch (Exception e) {
-                System.err.println("Error en la sesión de juego: " + e.getMessage());
-            } finally {
-                // Terminar el juego y notificar a los jugadores
-                for (PlayerHandler player : players) {
-                    player.out.println("Salir");
-                    player.close();
+                    // Lógica para determinar el ganador (simulada)
+                    String resultado = "Resultado de la partida: " + String.join(", ", choices);
+                    System.out.println(resultado);
+
+                    // Mostrar resultado a los jugadores y preguntar si quieren continuar
+                    for (PlayerHandler player : players) {
+                        player.sendMessage(resultado);
+                        player.sendMessage("¿Deseas continuar jugando? (sí/no)");
+
+                        String response = player.receiveMessage().trim().toLowerCase();
+                        if (!response.equals("sí")) {
+                            player.setWantsToContinue(false);
+                        }
+                    }
+
+                    // Verificar si todos los jugadores quieren continuar
+                    continuePlaying = players.stream().allMatch(PlayerHandler::wantsToContinue);
+
+                } catch (Exception e) {
+                    System.err.println("Error en la sesión de juego: " + e.getMessage());
+                    break;
                 }
+            }
+
+            // Terminar la sesión y notificar a los jugadores
+            for (PlayerHandler player : players) {
+                player.sendMessage("Gracias por jugar. ¡Hasta luego!");
+                player.close();
             }
         }
     }
