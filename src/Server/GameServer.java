@@ -1,210 +1,173 @@
-package Server;import java.io.*;
+package Server;
+
+import java.io.*;
 import java.net.*;
 import java.util.*;
-import javax.swing.*;
+import java.util.stream.Collectors;
+
+import javax.swing.JOptionPane;
 
 public class GameServer {
-    private static int PORT;
-    private static List<PlayerHandler> playersQueue = new ArrayList<>();
-    private static boolean serverRunning = true;
-    private static ServerSocket serverSocket;
+    private static final int PORT = 12345;
+    private static List<ClientHandler> players = new ArrayList<>();
+    private static Queue<ClientHandler> waitingQueue = new LinkedList<>();
 
     public static void main(String[] args) {
-        try {
-            // Solicitar el puerto para el servidor mediante JOptionPane
-            String portInput = JOptionPane.showInputDialog("Ingresa el puerto del servidor:");
-            PORT = (portInput == null || portInput.isEmpty()) ? 12345 : Integer.parseInt(portInput);
+        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
+            JOptionPane.showMessageDialog(null, "Servidor de Piedra, Papel o Tijera iniciado.");
 
-            serverSocket = new ServerSocket(PORT);
-            System.out.println("Servidor de Piedra, Papel o Tijera iniciado en el puerto " + PORT);
+            // Escuchar conexiones entrantes
+            while (true) {
+                Socket socket = serverSocket.accept();
+                ClientHandler newPlayer = new ClientHandler(socket);
+                waitingQueue.add(newPlayer);
 
-            // Mostrar ventana de confirmación para cerrar el servidor
-            Thread serverControlThread = new Thread(GameServer::showServerControlWindow);
-            serverControlThread.start();
-
-            // Aceptar conexiones de jugadores mientras el servidor está corriendo
-            while (serverRunning) {
-                try {
-                    Socket playerSocket = serverSocket.accept();
-                    String clientIp = playerSocket.getInetAddress().getHostAddress();
-                    System.out.println("Nuevo jugador conectado desde: " + clientIp);
-
-                    PlayerHandler playerHandler = new PlayerHandler(playerSocket);
-                    playersQueue.add(playerHandler);
-
-                    // Si hay al menos 3 jugadores, inicia una partida
-                    if (playersQueue.size() >= 3) {
-                        List<PlayerHandler> gamePlayers = new ArrayList<>(playersQueue.subList(0, 3));
-                        playersQueue.removeAll(gamePlayers);
-                        new Thread(new GameSession(gamePlayers)).start();
+                // Si hay al menos 3 jugadores esperando, iniciar una partida
+                if (waitingQueue.size() >= 3) {
+                    for (int i = 0; i < 3; i++) {
+                        players.add(waitingQueue.poll());
                     }
-                } catch (IOException e) {
-                    if (serverRunning) {
-                        System.err.println("Error al aceptar un jugador: " + e.getMessage());
-                    }
+                    // Iniciar el juego en un nuevo hilo
+                    new Thread(new Game(players)).start();
+                    players = new ArrayList<>();  // Reiniciar la lista de jugadores
                 }
             }
         } catch (IOException e) {
-            System.err.println("Error al iniciar el servidor: " + e.getMessage());
-        } finally {
-            closeServer();
+            JOptionPane.showMessageDialog(null, "Error en el servidor: " + e.getMessage());
         }
     }
+}
 
-    // Mostrar una ventana para controlar el servidor (iniciar y detener)
-    private static void showServerControlWindow() {
-        int option = JOptionPane.showConfirmDialog(
-                null,
-                "El servidor está activo en el puerto " + PORT + ".\n¿Deseas detener el servidor?",
-                "Servidor de Piedra, Papel o Tijera",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.INFORMATION_MESSAGE
-        );
+class Game implements Runnable {
+    private List<ClientHandler> players;
 
-        if (option == JOptionPane.YES_OPTION) {
-            stopServer();
-        }
+    public Game(List<ClientHandler> players) {
+        this.players = players;
     }
 
-    // Detener el servidor y cerrar todas las conexiones
-    public static void stopServer() {
-        serverRunning = false;
-        closeServer();
-        System.out.println("Servidor detenido.");
-    }
-
-    // Cerrar el servidor y todos los jugadores conectados
-    private static void closeServer() {
+    @Override
+    public void run() {
         try {
-            if (serverSocket != null && !serverSocket.isClosed()) {
-                serverSocket.close();
-            }
-            for (PlayerHandler player : playersQueue) {
-                player.close();
+            while (true) {
+                // Pedir a los jugadores que jueguen
+                for (ClientHandler player : players) {
+                    player.sendMessage("Juega");
+                }
+
+                // Obtener las respuestas de los jugadores
+                Map<ClientHandler, String> moves = new HashMap<>();
+                for (ClientHandler player : players) {
+                    String move = player.receiveMessage();
+                    if (move.equalsIgnoreCase("Salir")) {
+                        player.closeConnection();
+                        return;
+                    }
+                    moves.put(player, move);
+                }
+
+                // Determinar el ganador
+                String result = determineWinner(moves);
+
+                // Enviar el resultado a todos los jugadores
+                for (ClientHandler player : players) {
+                    player.sendMessage("Resultado de la partida: " + result);
+                }
+
+                // Preguntar si desean continuar
+                boolean allWantToContinue = true;
+                for (ClientHandler player : players) {
+                    player.sendMessage("¿Deseas continuar jugando? (sí/no)");
+                    String response = player.receiveMessage();
+                    if (!response.equalsIgnoreCase("sí")) {
+                        allWantToContinue = false;
+                    }
+                }
+
+                // Si algún jugador no quiere continuar, cerrar las conexiones
+                if (!allWantToContinue) {
+                    for (ClientHandler player : players) {
+                        player.closeConnection();
+                    }
+                    return;
+                }
             }
         } catch (IOException e) {
-            System.err.println("Error al cerrar el servidor: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
-    // Clase para manejar cada jugador conectado al servidor
-    static class PlayerHandler {
-        private Socket socket;
-        private PrintWriter out;
-        private BufferedReader in;
-        private boolean wantsToContinue = true;
+    // Lógica para determinar el ganador
+    private String determineWinner(Map<ClientHandler, String> moves) {
+        String[] options = {"Piedra", "Papel", "Tijera"};
+        Map<String, String> rules = new HashMap<>();
+        rules.put("Piedra", "Tijera");  // Piedra vence a Tijera
+        rules.put("Papel", "Piedra");   // Papel vence a Piedra
+        rules.put("Tijera", "Papel");   // Tijera vence a Papel
 
-        public PlayerHandler(Socket socket) throws IOException {
-            this.socket = socket;
-            this.out = new PrintWriter(socket.getOutputStream(), true);
-            this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            new Thread(this::handlePlayer).start();
+        Map<String, Integer> countMoves = new HashMap<>();
+        for (String move : moves.values()) {
+            countMoves.put(move, countMoves.getOrDefault(move, 0) + 1);
         }
 
-        // Manejar la comunicación con el jugador
-        private void handlePlayer() {
-            try {
-                out.println("Bienvenido al juego de Piedra, Papel o Tijera. Esperando más jugadores...");
-                while (serverRunning && !socket.isClosed()) {
-                    // Mantener al jugador esperando hasta que comience una partida
-                    Thread.sleep(1000);
-                }
-            } catch (Exception e) {
-                System.err.println("Error con el jugador: " + e.getMessage());
-            } finally {
-                close();
+        // Si todos hicieron la misma jugada o hay una triple combinación diferente
+        if (countMoves.size() == 1 || countMoves.size() == 3) {
+            return "Empate entre todos los jugadores";
+        }
+
+        // Encontrar la jugada ganadora
+        String winningMove = "";
+        for (String move : countMoves.keySet()) {
+            if (countMoves.get(move) == 1 && rules.get(move) != null && countMoves.get(rules.get(move)) != null) {
+                winningMove = move;
             }
         }
 
-        // Enviar mensaje al jugador
-        public void sendMessage(String message) {
-            out.println(message);
-        }
-
-        // Recibir respuesta del jugador
-        public String receiveMessage() throws IOException {
-            return in.readLine();
-        }
-
-        // Determinar si el jugador quiere continuar jugando
-        public boolean wantsToContinue() {
-            return wantsToContinue;
-        }
-
-        // Actualizar el estado de continuar jugando
-        public void setWantsToContinue(boolean value) {
-            this.wantsToContinue = value;
-        }
-
-        // Cerrar la conexión con el jugador
-        public void close() {
-            try {
-                if (socket != null) {
-                    socket.close();
-                }
-            } catch (IOException e) {
-                System.err.println("Error al cerrar la conexión con el jugador: " + e.getMessage());
+        // Obtener el/los ganador(es)
+        List<ClientHandler> winners = new ArrayList<>();
+        for (Map.Entry<ClientHandler, String> entry : moves.entrySet()) {
+            if (entry.getValue().equals(winningMove)) {
+                winners.add(entry.getKey());
             }
+        }
+
+        if (winners.size() == 1) {
+            return "El ganador es: Jugador " + winners.get(0).getId();
+        } else {
+        	return "Empate entre los jugadores: " + winners.stream().map(player -> String.valueOf(player.getId())).collect(Collectors.joining(", "));
+
         }
     }
+}
 
-    // Clase para manejar una sesión de juego entre 3 jugadores
-    static class GameSession implements Runnable {
-        private List<PlayerHandler> players;
+class ClientHandler {
+    private static int idCounter = 1;
+    private int id;
+    private Socket socket;
+    private BufferedReader in;
+    private PrintWriter out;
 
-        public GameSession(List<PlayerHandler> players) {
-            this.players = players;
-        }
+    public ClientHandler(Socket socket) throws IOException {
+        this.id = idCounter++;
+        this.socket = socket;
+        this.in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+        this.out = new PrintWriter(socket.getOutputStream(), true);
+    }
 
-        // Lógica principal del juego
-        @Override
-        public void run() {
-            boolean continuePlaying = true;
+    public int getId() {
+        return id;
+    }
 
-            while (continuePlaying) {
-                try {
-                    // Solicitar a los jugadores que jueguen
-                    for (PlayerHandler player : players) {
-                        player.sendMessage("Juega"); // Enviar instrucción para jugar
-                    }
+    public void sendMessage(String message) {
+        out.println(message);
+    }
 
-                    // Recibir las elecciones de los jugadores
-                    List<String> choices = new ArrayList<>();
-                    for (PlayerHandler player : players) {
-                        String choice = player.receiveMessage();
-                        choices.add(choice);
-                        System.out.println("Jugador eligió: " + choice);
-                    }
+    public String receiveMessage() throws IOException {
+        return in.readLine();
+    }
 
-                    // Lógica para determinar el ganador (simulada)
-                    String resultado = "Resultado de la partida: " + String.join(", ", choices);
-                    System.out.println(resultado);
-
-                    // Mostrar resultado a los jugadores y preguntar si quieren continuar
-                    for (PlayerHandler player : players) {
-                        player.sendMessage(resultado);
-                        player.sendMessage("¿Deseas continuar jugando? (sí/no)");
-
-                        String response = player.receiveMessage().trim().toLowerCase();
-                        if (!response.equals("sí")) {
-                            player.setWantsToContinue(false);
-                        }
-                    }
-
-                    // Verificar si todos los jugadores quieren continuar
-                    continuePlaying = players.stream().allMatch(PlayerHandler::wantsToContinue);
-
-                } catch (Exception e) {
-                    System.err.println("Error en la sesión de juego: " + e.getMessage());
-                    break;
-                }
-            }
-
-            // Terminar la sesión y notificar a los jugadores
-            for (PlayerHandler player : players) {
-                player.sendMessage("Gracias por jugar. ¡Hasta luego!");
-                player.close();
-            }
-        }
+    public void closeConnection() throws IOException {
+        socket.close();
+        in.close();
+        out.close();
     }
 }
